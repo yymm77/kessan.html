@@ -350,6 +350,7 @@ drop.ondrop=e=>{e.preventDefault();drop.classList.remove("hot");take(e.dataTrans
 pick.onchange=e=>take(e.target.files);
 
 function take(list){
+  DIAG=[];
   [...list].forEach(f=>{
     const rec={name:f.name,phase:"open"}; files.push(rec); drawFiles();
     const r=new FileReader();
@@ -386,9 +387,14 @@ function take(list){
   });
 }
 /* 列位置固定で読む: A日付 B曜日 C費目 D収入 E信用支出 F現金支出 G内容 */
+let DIAG=[];
 function readSheet(ws,sheet,file){
   const a=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,cellDates:true,defval:null});
   const out=[];
+  // 診断：先頭6行のA列とC列が何として届いているかを記録
+  a.slice(0,6).forEach((r,i)=>DIAG.push({sheet,line:i+1,
+    a:r[0], atype:(r[0]instanceof Date)?"Date":typeof r[0],
+    parsed:toDate(r[0]), c:r[2]}));
   a.forEach((r,i)=>{
     const d=toDate(r[0]); if(!d) return;                 // 見出し行・空行は自動で落ちる
     const item=(r[2]==null?"":String(r[2]).trim()); if(!item) return;
@@ -400,11 +406,31 @@ function readSheet(ws,sheet,file){
   return out;
 }
 function toDate(v){
-  if(v instanceof Date && !isNaN(v)) return v;
-  if(typeof v==="number" && v>40000 && v<50000) return new Date(Date.UTC(1899,11,30)-0+v*864e5);
+  if(v instanceof Date && !isNaN(v)) return new Date(v.getFullYear(),v.getMonth(),v.getDate());
+  if(typeof v==="number"){
+    if(v>20000 && v<60000){
+      const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000);
+      return new Date(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate());
+    }
+    return null;
+  }
   if(typeof v==="string"){
-    const m=v.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
-    if(m) return new Date(+m[1],+m[2]-1,+m[3]);
+    const t=v.trim(); if(!t) return null;
+    // 2026-07-01 / 2026/7/1 / 2026.7.1 / 26-7-1
+    let m=t.match(/^(\d{2,4})[-\/.年](\d{1,2})[-\/.月](\d{1,2})/);
+    if(m){ let y=+m[1]; if(y<100) y+=2000; return new Date(y,+m[2]-1,+m[3]); }
+    // 令和8年7月1日 / R8.7.1 / H30.4.1
+    m=t.match(/^(令和|平成|昭和|R|H|S)\s*(\d{1,2})[.\-\/年]\s*(\d{1,2})[.\-\/月]\s*(\d{1,2})/i);
+    if(m){
+      const base={"令和":2018,"R":2018,"r":2018,"平成":1988,"H":1988,"h":1988,"昭和":1925,"S":1925,"s":1925}[m[1]];
+      if(base) return new Date(base+ +m[2], +m[3]-1, +m[4]);
+    }
+    // Excelのシリアル値が文字列で来る場合
+    if(/^\d{5}(\.\d+)?$/.test(t)) return toDate(Number(t));
+    // 最後の手段
+    const d=new Date(t);
+    if(!isNaN(d) && d.getFullYear()>1990 && d.getFullYear()<2100)
+      return new Date(d.getFullYear(),d.getMonth(),d.getDate());
   }
   return null;
 }
@@ -477,6 +503,14 @@ function toCheck(){
   if(zero.length) h+=`<div class="flag"><b>金額が空の行 ${zero.length}件 を除きました</b><div>${zero.slice(0,20).map(line).join("<br>")}</div></div>`;
   if(!dup&&!out&&!neg.length&&!bal.length&&!zero.length)
     h+=`<div class="flag ok"><b>おかしな行は見つかりませんでした</b><div>そのまま振り分けに進めます。</div></div>`;
+  if(fy.length===0){
+    h+=`<div class="flag"><b>1行も読み取れませんでした。原因を調べます</b><div>
+      読み込んだ全行数：${all.length}　会計期間：${setup.d0||"未設定"} 〜 ${setup.d1||"未設定"}<br><br>
+      <b>各シートの先頭行が、どう届いているか</b><br>`+
+      DIAG.slice(0,40).map(d=>`${d.sheet}!${d.line}　A列=[${d.a}]（${d.atype}）→ 日付として${
+        d.parsed?"読めた:"+ymd(d.parsed):"<b>読めない</b>"}　C列=[${d.c}]`).join("<br>")+
+      `</div></div>`;
+  }
 
   document.getElementById("checks").innerHTML=h;
   unlock(2);unlock(3);go(2);
