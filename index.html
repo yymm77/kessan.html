@@ -60,6 +60,11 @@ p.note{color:var(--mid);font-size:14.5px;margin-bottom:16px}
 .frow{display:flex;justify-content:space-between;gap:14px;padding:11px 14px;border:1px solid var(--line);
       border-radius:7px;background:#fff;margin-bottom:8px;font-size:14.5px;flex-wrap:wrap}
 .frow b{font-weight:700}
+.frow{flex-direction:column;align-items:stretch}
+.frow .top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.bar{height:10px;background:#e3ddd0;border-radius:5px;overflow:hidden;margin-top:9px}
+.bar i{display:block;height:100%;background:var(--indigo);width:0;transition:width .18s linear}
+.eta{font-size:13.5px;color:var(--mid);margin-top:5px;font-variant-numeric:tabular-nums}
 .frow span{color:var(--mid)}
 
 /* 会計期間 */
@@ -72,6 +77,9 @@ p.note{color:var(--mid);font-size:14.5px;margin-bottom:16px}
 .btn{font-family:inherit;font-size:16px;font-weight:700;padding:13px 30px;border:none;border-radius:8px;
      background:var(--indigo);color:#fff;cursor:pointer;margin-top:22px}
 .btn:hover{background:#12293f}
+.btn:active{transform:translateY(2px)}
+.btn.busy{background:var(--gold);color:#3a2f00;cursor:wait}
+.btn.busy::after{content:"　処理中…"}
 .btn:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .btn.sub{background:transparent;color:var(--indigo);border:2px solid var(--indigo)}
 .btn.sm{font-size:14px;padding:8px 16px;margin-top:0}
@@ -163,7 +171,7 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <input type="file" id="pick" accept=".xlsx,.xlsm" multiple hidden>
   <div id="files"></div>
   <p class="note" id="periodnote" style="margin-top:18px"></p>
-  <button class="btn" id="go2" onclick="toCheck()" disabled>読み込んで点検する</button>
+  <button class="btn" id="go2" onclick="busy(this,toCheck)" disabled>読み込んで点検する</button>
 </div></section>
 
 <!-- 2 点検 -->
@@ -171,7 +179,7 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <h2>点検</h2>
   <p class="note">仕訳に進む前に、明らかにおかしい行を洗い出します。ここで除外した行は集計に入りません。</p>
   <div id="checks"></div>
-  <button class="btn" onclick="toMap()">費目の振り分けに進む</button>
+  <button class="btn" onclick="busy(this,toMap)">費目の振り分けに進む</button>
 </div></section>
 
 <!-- 3 費目 -->
@@ -183,8 +191,8 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
     <thead><tr><th>費目</th><th class="n">収入</th><th class="n">支出計</th><th class="n">件数</th><th style="width:230px">勘定科目</th></tr></thead>
     <tbody id="mapbody"></tbody>
   </table></div>
-  <button class="btn" onclick="toRows()">一件ずつの判断に進む</button>
-  <button class="btn sub" onclick="go(5);calc()">そのまま集計する</button>
+  <button class="btn" onclick="busy(this,toRows)">一件ずつの判断に進む</button>
+  <button class="btn sub" onclick="busy(this,()=>{calc();go(5)})">そのまま集計する</button>
 </div></section>
 
 <!-- 4 個別 -->
@@ -196,7 +204,7 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
     <thead><tr><th>日付</th><th>費目</th><th>内容</th><th class="n">金額</th><th style="width:210px">勘定科目</th></tr></thead>
     <tbody id="rowbody"></tbody>
   </table></div>
-  <button class="btn" onclick="go(5);calc()">集計する</button>
+  <button class="btn" onclick="busy(this,()=>{calc();go(5)})">集計する</button>
 </div></section>
 
 <!-- 5 結果 -->
@@ -219,7 +227,7 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <h3>実際の残高（照合用・分かれば入れてください）</h3>
   <div class="grid" id="g-real"></div>
 
-  <button class="btn" onclick="calcBS()">貸借対照表を作る</button>
+  <button class="btn" onclick="busy(this,calcBS)">貸借対照表を作る</button>
   <div id="bs"></div>
 </div></section>
 
@@ -321,6 +329,17 @@ function go(n){
 }
 function unlock(n){document.getElementById("t"+n).disabled=false}
 
+/* 押した手応えを出す。画面を一度描き直してから重い処理に入る */
+function busy(btn,fn){
+  const label=btn.textContent;
+  btn.classList.add("busy"); btn.disabled=true; btn.textContent="";
+  setTimeout(()=>{
+    try{ fn(); }
+    catch(e){ alert("処理の途中で問題が起きました。\n"+e.message); }
+    btn.classList.remove("busy"); btn.disabled=false; btn.textContent=label;
+  },50);
+}
+
 /* ══ 1. 読込 ══ */
 const drop=document.getElementById("drop"), pick=document.getElementById("pick");
 drop.onclick=()=>pick.click();
@@ -332,25 +351,40 @@ pick.onchange=e=>take(e.target.files);
 
 function take(list){
   [...list].forEach(f=>{
+    const rec={name:f.name,phase:"open"}; files.push(rec); drawFiles();
     const r=new FileReader();
-    r.onload=ev=>{
+    r.onload=ev=>{ setTimeout(()=>{
+      let wb, sh;
       try{
-        const wb=XLSX.read(new Uint8Array(ev.target.result),{type:"array",cellDates:true});
-        const sh=wb.SheetNames.filter(n=>n.includes("家計"));
-        let rows=[];
-        sh.forEach(n=>rows=rows.concat(readSheet(wb.Sheets[n],n,f.name)));
-        files.push({name:f.name,sheets:sh.length,rows:rows.length});
-        all=all.concat(rows);
-        drawFiles();
+        wb=XLSX.read(new Uint8Array(ev.target.result),{type:"array",cellDates:true});
+        sh=wb.SheetNames.filter(n=>n.includes("家計"));
       }catch(err){
-        files.push({name:f.name,err:"読めませんでした（"+err.message+"）"});
-        drawFiles();
+        rec.phase=null; rec.err="読めませんでした（"+err.message+"）"; drawFiles(); return;
       }
-    };
+      rec.phase="scan"; rec.total=sh.length; rec.done=0; rec.rows=0; rec.sheets=sh.length;
+      const t0=performance.now();
+      drawFiles();
+      /* 1枚ずつ読む。合間に画面を描き直すので進み具合が見える */
+      const step=()=>{
+        if(rec.done>=sh.length){
+          rec.phase=null; drawFiles(); return;
+        }
+        const n=sh[rec.done];
+        try{
+          const rows=readSheet(wb.Sheets[n],n,f.name);
+          all=all.concat(rows); rec.rows+=rows.length;
+        }catch(e){}
+        rec.done++;
+        const per=(performance.now()-t0)/rec.done;
+        rec.eta=(sh.length-rec.done)*per/1000;
+        drawFiles();
+        setTimeout(step,0);
+      };
+      setTimeout(step,0);
+      },30); };
     r.readAsArrayBuffer(f);
   });
 }
-
 /* 列位置固定で読む: A日付 B曜日 C費目 D収入 E信用支出 F現金支出 G内容 */
 function readSheet(ws,sheet,file){
   const a=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,cellDates:true,defval:null});
@@ -375,9 +409,24 @@ function toDate(v){
   return null;
 }
 function drawFiles(){
-  document.getElementById("files").innerHTML=files.map(f=>
-    `<div class="frow"><b>${f.name}</b><span>${f.err?f.err:f.sheets+"シート／"+f.rows+"行"}</span></div>`).join("");
-  document.getElementById("go2").disabled = all.length===0;
+  document.getElementById("files").innerHTML=files.map(f=>{
+    let right="", bar="", eta="";
+    if(f.err) right=f.err;
+    else if(f.phase==="open"){ right="ファイルを開いています…"; bar=`<div class="bar"><i style="width:8%"></i></div>`; }
+    else if(f.phase==="scan"){
+      const pct=Math.round(f.done/f.total*100);
+      right=`シートを読んでいます　${f.done} / ${f.total}`;
+      bar=`<div class="bar"><i style="width:${pct}%"></i></div>`;
+      eta=`<div class="eta">${pct}％完了${f.eta!=null?"　残り約 "+fmtSec(f.eta):""}</div>`;
+    }
+    else right=`${f.sheets}シート／${f.rows}行　読み込み完了`;
+    return `<div class="frow"><div class="top"><b>${esc(f.name)}</b><span>${right}</span></div>${bar}${eta}</div>`;
+  }).join("");
+  document.getElementById("go2").disabled = all.length===0 || files.some(f=>f.phase);
+}
+function fmtSec(s){
+  s=Math.max(1,Math.ceil(s));
+  return s<60 ? s+"秒" : Math.floor(s/60)+"分"+String(s%60).padStart(2,"0")+"秒";
 }
 
 /* ══ 2. 点検 ══ */
