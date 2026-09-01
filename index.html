@@ -130,6 +130,29 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
 .f input{width:100%;font-family:inherit;font-size:17px;padding:9px 11px;border:1px solid var(--line);
          border-radius:6px;background:#fff;text-align:right;font-variant-numeric:tabular-nums}
 .f input:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
+/* ── 印刷 ── */
+#paper{display:none}
+#paper h3{font-family:"Zen Old Mincho",serif;font-size:17px;text-align:center;margin:26px 0 4px;
+  letter-spacing:.3em;border:none;padding:0}
+#paper .sub{text-align:center;font-size:13px;margin-bottom:14px}
+#paper .co{font-size:13px;margin-bottom:6px}
+#paper table{font-size:13px;margin-bottom:20px}
+#paper th{background:#eee;color:#000;border:1px solid #999;font-weight:700}
+#paper td{border:1px solid #ccc}
+#paper .tot td{border-top:2px solid #000;font-weight:700;background:#f4f4f4}
+#paper .sec td{background:#f0f0f0;font-weight:700}
+#paper .note2{font-size:11.5px;color:#555;margin:-12px 0 18px}
+@media print{
+  @page{size:A4;margin:16mm 14mm}
+  body{background:#fff;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  header,nav,section .panel,.noprint{display:none !important}
+  #paper{display:block !important}
+  #paper table{page-break-inside:auto}
+  #paper tr{page-break-inside:avoid}
+  #paper h3{page-break-before:always}
+  #paper h3:first-of-type{page-break-before:auto}
+}
 @media(max-width:640px){
   h1{font-size:23px} .panel{padding:18px 14px} body{font-size:15px}
   nav button{min-width:calc(50% - 2px)}
@@ -152,6 +175,7 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <button role="tab" id="t4" aria-selected="false" onclick="go(4)" disabled>4　一件ずつ判断</button>
   <button role="tab" id="t5" aria-selected="false" onclick="go(5)" disabled>5　損益計算書</button>
   <button role="tab" id="t6" aria-selected="false" onclick="go(6)" disabled>6　貸借対照表</button>
+  <button role="tab" id="t7" aria-selected="false" onclick="go(7)" disabled>7　印刷する</button>
 </nav>
 
 <!-- 0 設定 -->
@@ -256,6 +280,22 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <div id="bs"></div>
 </div></section>
 
+<!-- 7 印刷 -->
+<section id="s7"><div class="panel noprint">
+  <h2>印刷する</h2>
+  <p class="note">印刷したい書類を選んでください。画面のタブやボタンは印刷されません。<br>
+  印刷画面で「送信先」を <b>PDFに保存</b> にすると、PDFファイルとして残せます。</p>
+  <div class="tools">
+    <button class="btn sm" onclick="prt('A')">決算書一式</button>
+    <button class="btn sm" onclick="prt('B')">申告書への転記表</button>
+    <button class="btn sm" onclick="prt('C')">総勘定元帳</button>
+    <button class="btn sm sub" onclick="prt('J')">仕訳一覧</button>
+  </div>
+  <p class="note" id="prtnote"></p>
+</div>
+<div id="paper"></div>
+</section>
+
 </div>
 <script>
 /* ══ 勘定科目（前期決算書の科目にもとづく） ══ */
@@ -346,7 +386,7 @@ const ymd=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+Stri
 
 /* ══ 画面切替 ══ */
 function go(n){
-  for(let i=0;i<=6;i++){
+  for(let i=0;i<=7;i++){
     document.getElementById("s"+i).classList.toggle("on",i===n);
     document.getElementById("t"+i).setAttribute("aria-selected",i===n);
   }
@@ -782,11 +822,12 @@ function calc(){
   }
   document.getElementById("result").innerHTML=h;
   keijoEki=keijo;
+  PL={uriage,genka,arari,hankan,eigyo,keijo,sga,sum,zatsu:S("雑収入")};
   unlock(5);unlock(6);
 }
 
 /* ══ 6. 貸借対照表 ══ */
-let keijoEki=0;
+let keijoEki=0, PL=null, BS=null;
 const K_BS="kessan_bs_v1";
 const MOVE=[
   ["addLoan","当期の借入増加額（会社に入れたお金）",0],
@@ -857,6 +898,111 @@ function calcBS(){
   const kes=Number(String(setup.pKes||"").replace(/[,¥\s]/g,""))||0;
   if(kes) h+=`<p class="note" style="margin-top:16px">前期末の繰越欠損金は ${yen(kes)}円 です。当期が黒字でも、この範囲内であれば所得は生じない見込みです。実際の適用は別表七(一)でご確認ください。</p>`;
   document.getElementById("bs").innerHTML=h;
+  BS={cash,tax,loan,dep,cap:O("cap"),ret,liab,net,netIncome,diff,newTax:V("newTax")};
+  unlock(7);
+}
+
+/* ══ 7. 印刷 ══ */
+const jp=d=>{const y=d.getFullYear()-2018;return "令和"+y+"年"+(d.getMonth()+1)+"月"+d.getDate()+"日"};
+const D=k=>setup[k]?new Date(setup[k]+"T00:00:00"):null;
+function prt(kind){
+  if(!PL){ alert("先に「5　損益計算書」で集計してください。"); return; }
+  if((kind==="A")&&!BS){ alert("先に「6　貸借対照表」を作成してください。"); return; }
+  const co=setup.name||"（会社名未設定）";
+  const d0=D("d0"), d1=D("d1");
+  const per=d0&&d1 ? "自　"+jp(d0)+"　　至　"+jp(d1) : "";
+  const R=(l,v,c="")=>`<tr class="${c}"><td>${l}</td><td class="n">${yen(v)}</td></tr>`;
+  let h=`<div class="co">${esc(co)}</div>`;
+
+  if(kind==="A"){
+    h+=`<h3>損益計算書</h3><div class="sub">${per}</div><table>`;
+    h+=`<tr class="sec"><td colspan="2">売上高</td></tr>`+R("売上高",PL.uriage);
+    if(PL.genka){h+=`<tr class="sec"><td colspan="2">売上原価</td></tr>`+R("仕入高",PL.genka)+R("売上総利益",PL.arari,"tot")}
+    h+=`<tr class="sec"><td colspan="2">販売費及び一般管理費</td></tr>`;
+    PL.sga.forEach(k=>h+=R(k,PL.sum[k]));
+    h+=R("販売費及び一般管理費 合計",PL.hankan,"tot")+R("営業利益",PL.eigyo,"tot");
+    if(PL.zatsu){h+=`<tr class="sec"><td colspan="2">営業外収益</td></tr>`+R("雑収入",PL.zatsu)}
+    h+=R("経常利益",PL.keijo,"tot");
+    if(BS.newTax) h+=R("法人税、住民税及び事業税",BS.newTax);
+    h+=R("当期純利益",BS.netIncome,"tot")+`</table>`;
+
+    h+=`<h3>貸借対照表</h3><div class="sub">${d1?jp(d1)+"　現在":""}</div><table>`;
+    h+=`<tr class="sec"><td colspan="2">資産の部</td></tr>`+R("現金及び預金",BS.cash)+R("資産合計",BS.cash,"tot");
+    h+=`<tr class="sec"><td colspan="2">負債の部</td></tr>`+R("未払法人税等",BS.tax)
+      +R("株主、役員又は従業員からの短期借入金",BS.loan)+R("その他預り金",BS.dep)+R("負債合計",BS.liab,"tot");
+    h+=`<tr class="sec"><td colspan="2">純資産の部</td></tr>`+R("資本金",BS.cap)
+      +R("繰越利益剰余金",BS.ret)+R("純資産合計",BS.net,"tot")+R("負債・純資産合計",BS.liab+BS.net,"tot")+`</table>`;
+    if(Math.abs(BS.diff)>=1) h+=`<div class="note2">※ 資産と負債・純資産に ${yen(Math.abs(BS.diff))}円 の差があります。記録されていない入出金がないかご確認ください。</div>`;
+
+    h+=`<h3>株主資本等変動計算書</h3><div class="sub">${per}</div>
+      <table><tr><th></th><th class="n">資本金</th><th class="n">繰越利益剰余金</th><th class="n">純資産合計</th></tr>
+      <tr><td>当期首残高</td><td class="n">${yen(BS.cap)}</td><td class="n">${yen(BS.ret-BS.netIncome)}</td><td class="n">${yen(BS.net-BS.netIncome)}</td></tr>
+      <tr><td>当期純${BS.netIncome<0?"損失":"利益"}</td><td class="n">—</td><td class="n">${yen(BS.netIncome)}</td><td class="n">${yen(BS.netIncome)}</td></tr>
+      <tr class="tot"><td>当期末残高</td><td class="n">${yen(BS.cap)}</td><td class="n">${yen(BS.ret)}</td><td class="n">${yen(BS.net)}</td></tr>
+      </table>`;
+  }
+
+  if(kind==="B"){
+    const kes=Number(String(setup.pKes||"").replace(/[,¥\s]/g,""))||0;
+    const kou=PL.sum["交際費"]||0;
+    const row=(a,b,c)=>`<tr><td>${a}</td><td>${b}</td><td class="n">${c}</td></tr>`;
+    h+=`<h3>申告書への転記表</h3><div class="sub">${per}</div>
+      <table><tr><th style="width:26%">書類</th><th>欄</th><th class="n" style="width:22%">金額</th></tr>`;
+    const shotoku=BS.netIncome+BS.newTax;   // 当期利益＋納税充当金加算
+    h+=row("別表四","1　当期利益又は当期欠損の額",yen(BS.netIncome));
+    h+=row("別表四","4　損金経理をした納税充当金（加算）",BS.newTax?yen(BS.newTax):"—");
+    h+=row("別表四","52　所得金額又は欠損金額",yen(shotoku));
+    h+=row("別表一","1　所得金額又は欠損金額",yen(shotoku));
+    h+=row("別表七(一)","当期分　欠損金額",shotoku<0?yen(-shotoku):"—");
+    h+=row("別表七(一)","前期からの繰越額",kes?yen(-kes):"要確認");
+    h+=row("別表七(一)","翌期繰越額",kes?yen(-(kes+Math.max(0,-shotoku))):"要確認");
+    h+=row("別表一","27　翌期へ繰り越す欠損金額",kes?yen(-(kes+Math.max(0,-shotoku))):"要確認");
+    h+=row("別表十五","1　支出交際費等の額",yen(kou));
+    h+=row("別表十五","4　損金算入限度額",yen(Math.min(kou,3000000)));
+    h+=row("別表十五","5　損金不算入額",yen(Math.max(0,kou-3000000)));
+    h+=row("預貯金等の内訳書","期末現在高",yen(BS.cash));
+    h+=row("法人事業概況説明書","10　売上（収入）高（千円）",Math.round(PL.uriage/1000).toLocaleString());
+    h+=row("法人事業概況説明書","10　売上（収入）原価（千円）",Math.round(PL.genka/1000).toLocaleString());
+    h+=row("法人事業概況説明書","10　売上（収入）総利益（千円）",Math.round(PL.arari/1000).toLocaleString());
+    h+=row("法人事業概況説明書","10　営業損益（千円）",Math.round(PL.eigyo/1000).toLocaleString());
+    h+=row("法人事業概況説明書","10　税引前当期損益（千円）",Math.round(PL.keijo/1000).toLocaleString());
+    h+=row("法人事業概況説明書","負債のうち　個人借入金（千円）",Math.round(BS.loan/1000).toLocaleString());
+    h+=`</table><div class="note2">
+      ※ 別表四の所得金額は「当期利益＋納税充当金」で計算しています。他に加算・減算すべき項目があれば、ご自身で調整してください。<br>
+      ※ 所得が黒字の場合、繰越欠損金の充当により翌期繰越額は減ります。上の翌期繰越額は欠損の場合のみ正しく、黒字時は別表七(一)でご確認ください。<br>
+      ※ 別表二・五・六は、この帳簿からは作れません。前期の申告書を引き継いでください。</div>`;
+  }
+
+  if(kind==="C"||kind==="J"){
+    const byK={};
+    journal.filter(j=>j.k&&j.k!=="対象外（個人）").forEach(j=>(byK[j.k]=byK[j.k]||[]).push(j));
+    if(kind==="C"){
+      h+=`<h3>総勘定元帳</h3><div class="sub">${per}</div>`;
+      Object.keys(byK).sort((a,b)=>KAMOKU.indexOf(a)-KAMOKU.indexOf(b)).forEach(k=>{
+        const rows=byK[k].sort((x,y)=>x.date-y.date);
+        let run=0;
+        h+=`<div class="co" style="margin-top:14px;font-weight:700">${k}</div>
+          <table><tr><th style="width:14%">日付</th><th style="width:14%">費目</th><th>摘要</th>
+          <th class="n" style="width:14%">金額</th><th class="n" style="width:14%">累計</th></tr>`;
+        rows.forEach(j=>{run+=j.amt;
+          h+=`<tr><td>${ymd(j.date)}</td><td>${esc(j.item)}</td><td>${esc(j.memo)}</td>
+            <td class="n">${yen(j.amt)}</td><td class="n">${yen(run)}</td></tr>`});
+        h+=`<tr class="tot"><td colspan="3">${k}　合計　${rows.length}件</td>
+          <td class="n">${yen(run)}</td><td class="n"></td></tr></table>`;
+      });
+    }else{
+      const rows=journal.filter(j=>j.k).sort((x,y)=>x.date-y.date);
+      h+=`<h3>仕訳一覧</h3><div class="sub">${per}　${rows.length}件</div>
+        <table><tr><th style="width:12%">日付</th><th style="width:13%">費目</th>
+        <th style="width:15%">勘定科目</th><th>摘要</th><th class="n" style="width:12%">金額</th></tr>`;
+      rows.forEach(j=>h+=`<tr><td>${ymd(j.date)}</td><td>${esc(j.item)}</td><td>${esc(j.k)}</td>
+        <td>${esc(j.memo)}</td><td class="n">${j.amt!=null?yen(j.amt):"—"}</td></tr>`);
+      h+=`</table>`;
+    }
+  }
+  document.getElementById("paper").innerHTML=h;
+  document.getElementById("prtnote").textContent="印刷画面を開きます。";
+  setTimeout(()=>window.print(),100);
 }
 
 function dl(){
