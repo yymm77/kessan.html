@@ -64,6 +64,15 @@ p.note{color:var(--mid);font-size:14.5px;margin-bottom:16px}
 .frow .top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .bar{height:10px;background:#e3ddd0;border-radius:5px;overflow:hidden;margin-top:9px}
 .bar i{display:block;height:100%;background:var(--indigo);width:0;transition:width .18s linear}
+/* 進み具合が測れない工程は、縞模様を流して作業中であることを示す */
+.bar.flow i{
+  width:100%;
+  background:repeating-linear-gradient(115deg,
+    var(--indigo) 0 14px, #2f5f8c 14px 28px);
+  animation:flow 1s linear infinite}
+@keyframes flow{from{background-position:0 0}to{background-position:56px 0}}
+.bar.flow{background:#e3ddd0}
+@media(prefers-reduced-motion:reduce){.bar.flow i{animation:none}}
 .eta{font-size:13.5px;color:var(--mid);margin-top:5px;font-variant-numeric:tabular-nums}
 .frow span{color:var(--mid)}
 
@@ -172,6 +181,7 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <div id="files"></div>
   <p class="note" id="periodnote" style="margin-top:18px"></p>
   <button class="btn" id="go2" onclick="busy(this,toCheck)" disabled>読み込んで点検する</button>
+  <button class="btn sub" onclick="reset()">読み込んだファイルを取り消してやり直す</button>
 </div></section>
 
 <!-- 2 点検 -->
@@ -349,10 +359,21 @@ drop.ondragleave=()=>drop.classList.remove("hot");
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove("hot");take(e.dataTransfer.files)};
 pick.onchange=e=>take(e.target.files);
 
+let tick=null;
+function startTick(){
+  if(tick) return;
+  tick=setInterval(()=>{
+    let live=false;
+    files.forEach(f=>{ if(f.phase){ f.sec=(f.sec||0)+1; live=true; } });
+    if(live) drawFiles(); else { clearInterval(tick); tick=null; }
+  },1000);
+}
 function take(list){
-  DIAG=[];
   [...list].forEach(f=>{
-    const rec={name:f.name,phase:"open"}; files.push(rec); drawFiles();
+    if(files.some(x=>x.name===f.name && !x.err)){
+      const w=files.find(x=>x.name===f.name); w.dup=true; drawFiles(); return;   // 既に読んである
+    }
+    const rec={name:f.name,phase:"open",sec:0}; files.push(rec); drawFiles(); startTick();
     const r=new FileReader();
     r.onload=ev=>{ setTimeout(()=>{
       let wb, sh;
@@ -446,18 +467,28 @@ function toDate(v){
   }
   return null;
 }
+function reset(){
+  files=[]; all=[]; fy=[]; dropped=[]; DIAG=[];
+  document.getElementById("pick").value="";
+  drawFiles();
+}
 function drawFiles(){
   document.getElementById("files").innerHTML=files.map(f=>{
     let right="", bar="", eta="";
     if(f.err) right=f.err;
-    else if(f.phase==="open"){ right="ファイルを開いています…"; bar=`<div class="bar"><i style="width:8%"></i></div>`; }
+    else if(f.phase==="open"){
+      right="ファイルを開いています…";
+      bar=`<div class="bar flow"><i></i></div>`;
+      eta=`<div class="eta">${f.sec||0}秒経過　大きいファイルは1〜3分かかります</div>`;
+    }
     else if(f.phase==="scan"){
       const pct=Math.round(f.done/f.total*100);
       right=`シートを読んでいます　${f.done} / ${f.total}`;
       bar=`<div class="bar"><i style="width:${pct}%"></i></div>`;
-      eta=`<div class="eta">${pct}％完了${f.eta!=null?"　残り約 "+fmtSec(f.eta):""}</div>`;
+      eta=`<div class="eta">${pct}％完了${f.eta!=null?"　残り約 "+fmtSec(f.eta):""}　（${f.sec||0}秒経過）</div>`;
     }
-    else right=`${f.sheets}シート／${f.rows}行　読み込み完了`;
+    else right=`${f.sheets}シート／${f.rows}行　読み込み完了${
+      f.dup?"　※同じファイルが再度置かれましたが、読み込み済みのため無視しました":""}`;
     return `<div class="frow"><div class="top"><b>${esc(f.name)}</b><span>${right}</span></div>${bar}${eta}</div>`;
   }).join("");
   document.getElementById("go2").disabled = all.length===0 || files.some(f=>f.phase);
@@ -472,7 +503,7 @@ function toCheck(){
   const d0=new Date(setup.d0+"T00:00:00");
   const d1=new Date(setup.d1+"T23:59:59");
 
-  // 重複除去
+  // 重複除去（同じ日付・費目・金額・内容の行は1件にまとめる）
   const seen=new Set(); const uniq=[];
   all.forEach(r=>{
     const k=[ymd(r.date),r.item,r.inc,r.cre,r.exp,r.memo].join("|");
