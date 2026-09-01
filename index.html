@@ -333,8 +333,8 @@ function applySetup(){
 }
 function wipe(){
   if(!confirm("この端末に保存した設定・費目の振り分け・個別判断を、すべて消します。よろしいですか。")) return;
-  [K_ITEM,K_ROW,K_SET,"kessan_bs_v1"].forEach(k=>{try{localStorage.removeItem(k)}catch(e){}});
-  mapItem={};mapRow={};setup={};drawSetup();applySetup();
+  [K_ITEM,K_ROW,K_SET,K_SPLIT,"kessan_bs_v1"].forEach(k=>{try{localStorage.removeItem(k)}catch(e){}});
+  mapItem={};mapRow={};setup={};split={};drawSetup();applySetup();
   document.getElementById("setupmsg").innerHTML=
     `<div class="flag ok"><b>消しました</b><div>この端末に会社の数字は残っていません。</div></div>`;
 }
@@ -645,10 +645,31 @@ function buildGroups(){
   const g={};
   kobetsu().forEach(r=>{
     const {key,label}=gkeyOf(r);
-    if(!g[key]) g[key]={key,item:r.item,label,rows:[],amt:0,sug:suggest(r.item,r.memo)};
-    g[key].rows.push(r); g[key].amt+=r.inc||(r.cre+r.exp);
+    const k2=groupKeyOf(r);                    // 集計と同じ判定を使う
+    const half=k2.endsWith("#A")?"A":k2.endsWith("#B")?"B":"";
+    if(!g[k2]) g[k2]={key:k2,base:key,half,item:r.item,label,rows:[],amt:0,sug:suggest(r.item,r.memo)};
+    g[k2].rows.push(r); g[k2].amt+=r.inc||(r.cre+r.exp);
   });
   groups=Object.values(g).sort((a,b)=>b.amt-a.amt);
+  groups.forEach(g=>{
+    const t=g.rows.map(r=>r.date.getTime());
+    g.from=new Date(Math.min(...t)); g.to=new Date(Math.max(...t));
+  });
+}
+/* 期の途中で扱いが変わった費目は、日付で前後に分けられる */
+const K_SPLIT="kessan_split_v1";
+let split=load(K_SPLIT);
+function setSplit(base,d){
+  if(d) split[base]=d; else delete split[base];
+  save(K_SPLIT,split); buildGroups(); drawRows();
+}
+function askSplit(base){
+  const cur=split[base]||"";
+  const d=prompt("この内容を、日付で前と後に分けます。\n境目の日を入れてください（この日からが「後」になります）。\n\n例　2026-01-01\n\n空欄にすると分割を取り消します。",cur||"2026-01-01");
+  if(d===null) return;
+  const t=d.trim();
+  if(t && !/^\d{4}-\d{2}-\d{2}$/.test(t)){ alert("2026-01-01 の形で入れてください。"); return; }
+  setSplit(base,t);
 }
 function setFilter(f){filter=f;drawRows()}
 function drawRows(){
@@ -659,7 +680,9 @@ function drawRows(){
   document.getElementById("rowbody").innerHTML = list.length ? list.map(g=>{
     const cur=mapRow[g.key]||"";
     return `<tr><td>${esc(g.item)}</td>
-      <td>${esc(g.label)}<div class="sug">${cur?"":"提案："+g.sug}${
+      <td>${esc(g.label)}${g.half?`<span class="pill">${g.half==="A"?"前半":"後半"}</span>`:""}
+        <div class="sug">${ymd(g.from)}${g.from-g.to?" 〜 "+ymd(g.to):""}
+        ${cur?"":"　提案："+g.sug}${
         bigWarn(g)?'<b style="color:var(--verm)">　10万円以上の行があります。資産に計上すべきものでないかご確認ください</b>':""}</div></td>
       <td class="n">${g.rows.length}</td><td class="n">${yen(g.amt)}</td>
       <td><select class="${cur?"":"unset"}" onchange="setGroup('${esc(g.key)}',this.value)">
@@ -667,7 +690,10 @@ function drawRows(){
         ${opts.map(o=>`<option${o===cur?" selected":""}>${o}</option>`).join("")}
       </select></td>
       <td>${cur?`<span class="done">✓ 確定</span>`
-        :`<button class="btn sm" onclick="setGroup('${esc(g.key)}','${g.sug}')">提案どおり</button>`}</td>
+        :`<button class="btn sm" onclick="setGroup('${esc(g.key)}','${g.sug}')">提案どおり</button>`}
+        ${g.rows.length>1&&(g.to-g.from)>0
+          ?`<div><button class="btn sm sub" style="margin-top:5px;font-size:12.5px;padding:5px 10px"
+              onclick="askSplit('${esc(g.base)}')">${split[g.base]?"分割を直す":"日付で分ける"}</button></div>`:""}</td>
     </tr>`;
   }).join("") : `<tr><td colspan="6" style="padding:22px;text-align:center;color:var(--mid)">
       ${filter==="undecided"?"未決定はありません。すべて決まりました。":"対象がありません。"}</td></tr>`;
@@ -697,9 +723,15 @@ function acceptAll(){
 function toRows(){ buildGroups(); filter="undecided"; drawRows(); unlock(4); go(4); }
 /* ══ 5. 集計 ══ */
 let journal=[];
+/* 1行がどのグループに属するか。画面と集計で必ず同じ判定を使う */
+function groupKeyOf(r){
+  const base=gkeyOf(r).key, sp=split[base];
+  if(!sp) return base;
+  return base+"#"+(r.date<new Date(sp+"T00:00:00")?"A":"B");
+}
 function kamokuOf(r){
   const k=mapItem[r.item]??SUGGEST[r.item]??"";
-  if(k==="一件ずつ判断") return mapRow[gkeyOf(r).key]||"";
+  if(k==="一件ずつ判断") return mapRow[groupKeyOf(r)]||"";
   return k;
 }
 function calc(){
