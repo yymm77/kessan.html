@@ -286,7 +286,16 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <p class="note">印刷したい書類を選んでください。画面のタブやボタンは印刷されません。<br>
   印刷画面で「送信先」を <b>PDFに保存</b> にすると、PDFファイルとして残せます。</p>
   <div class="tools">
-    <button class="btn sm" onclick="prt('A')">決算書一式</button>
+    <button class="btn sm" onclick="prt('A')">決算書一式（3枚）</button>
+    <span class="sep"></span>
+  </div>
+  <p class="note" style="margin:2px 0 10px">一式でなく、1枚ずつ出すこともできます。</p>
+  <div class="tools" style="margin-top:0">
+    <button class="btn sm sub" onclick="prt('PL')">損益計算書</button>
+    <button class="btn sm sub" onclick="prt('BS')">貸借対照表</button>
+    <button class="btn sm sub" onclick="prt('SS')">株主資本等変動計算書</button>
+  </div>
+  <div class="tools">
     <button class="btn sm" onclick="prt('B')">申告書への転記表</button>
     <button class="btn sm" onclick="prt('C')">総勘定元帳</button>
     <button class="btn sm sub" onclick="prt('J')">仕訳一覧</button>
@@ -474,7 +483,7 @@ function readSheet(ws,sheet,file){
   let a;
   try{
     const R=XLSX.utils.decode_range(ws["!ref"]);
-    const lim={s:{r:R.s.r,c:0},e:{r:Math.min(R.e.r,R.s.r+4999),c:6}};
+    const lim={s:{r:R.s.r,c:0},e:{r:Math.min(R.e.r,R.s.r+4999),c:7}};   // H列(区分)まで読む
     a=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null,range:lim});
   }catch(e){ return []; }
   const base=(XLSX.utils.decode_range(ws["!ref"]).s.r)+1;   // 実際の行番号に合わせる
@@ -488,7 +497,8 @@ function readSheet(ws,sheet,file){
     const num=v=>{if(v==null)return 0;const n=Number(String(v).replace(/[,¥\s]/g,""));return isFinite(n)?n:0};
     out.push({file,sheet,line:base+i,date:d,item,
       inc:num(r[3]), cre:num(r[4]), exp:num(r[5]),
-      memo:(r[6]==null?"":String(r[6]).trim())});
+      memo:(r[6]==null?"":String(r[6]).trim()),
+      kubun:(r[7]==null?"":String(r[7]).trim())});   // H列。「法人」「個人」があれば個別判断を省ける
   });
   return out;
 }
@@ -678,7 +688,8 @@ function gkeyOf(r){
   for(const k of KW) if(r.memo.includes(k)) return {key:r.item+"|kw:"+k, label:"「"+k+"」を含むもの"};
   return {key:r.item+"|m:"+normMemo(r.memo), label:r.memo||"（内容の記載なし）"};
 }
-const kobetsu=()=>fy.filter(r=>(mapItem[r.item]??SUGGEST[r.item])==="一件ずつ判断");
+const kobetsu=()=>fy.filter(r=>
+  (mapItem[r.item]??SUGGEST[r.item])==="一件ずつ判断" && r.kubun!=="個人" && !(r.kubun==="法人"&&mapItemHojin(r.item)));
 
 let groups=[], filter="undecided";
 function buildGroups(){
@@ -739,9 +750,11 @@ function drawRows(){
       ${filter==="undecided"?"未決定はありません。すべて決まりました。":"対象がありません。"}</td></tr>`;
   const un=groups.filter(g=>!mapRow[g.key]);
   const rows=groups.reduce((a,g)=>a+g.rows.length,0);
+  const skipped=fy.filter(r=>(mapItem[r.item]??SUGGEST[r.item])==="一件ずつ判断"&&r.kubun).length;
   document.getElementById("rowsinfo").innerHTML=
     `<div class="flag ${un.length?"":"ok"}"><b>${rows}行を ${groups.length}グループ にまとめました</b>
-     <div>未決定 ${un.length}グループ（${un.reduce((a,g)=>a+g.rows.length,0)}行）</div></div>`;
+     <div>未決定 ${un.length}グループ（${un.reduce((a,g)=>a+g.rows.length,0)}行）${
+     skipped?`<br>Excelの区分欄（H列）で決めてある ${skipped}行 は、ここに出てきません。`:""}</div></div>`;
 }
 function setGroup(key,val){
   if(val) mapRow[key]=val; else delete mapRow[key];
@@ -771,8 +784,17 @@ function groupKeyOf(r){
 }
 function kamokuOf(r){
   const k=mapItem[r.item]??SUGGEST[r.item]??"";
-  if(k==="一件ずつ判断") return mapRow[groupKeyOf(r)]||"";
-  return k;
+  if(k!=="一件ずつ判断") return k;
+  if(r.kubun==="個人") return "対象外（個人）";        // 入力時に決めてあるものは尊重する
+  if(r.kubun==="法人") return mapRow[groupKeyOf(r)]||mapItemHojin(r.item);
+  return mapRow[groupKeyOf(r)]||"";
+}
+/* 「法人」と分かっているが科目未定のとき、費目から推す */
+function mapItemHojin(item){
+  const m={"TSD経費":"仕入高","TSD備品":"消耗品費","ISD経費":"仕入高","食費":"福利厚生費",
+           "園芸費":"消耗品費","植栽費":"消耗品費","雑費":"雑費","被服費":"消耗品費",
+           "日用品費":"消耗品費","衛生費":"消耗品費","土産":"交際費"};
+  return m[item]||"";
 }
 function calc(){
   journal=[];
@@ -907,14 +929,15 @@ const jp=d=>{const y=d.getFullYear()-2018;return "令和"+y+"年"+(d.getMonth()+
 const D=k=>setup[k]?new Date(setup[k]+"T00:00:00"):null;
 function prt(kind){
   if(!PL){ alert("先に「5　損益計算書」で集計してください。"); return; }
-  if((kind==="A")&&!BS){ alert("先に「6　貸借対照表」を作成してください。"); return; }
+  if(/^(A|BS|SS)$/.test(kind) && !BS){
+    alert("先に「6　貸借対照表」の画面で［貸借対照表を作る］を押してください。"); go(6); return; }
   const co=setup.name||"（会社名未設定）";
   const d0=D("d0"), d1=D("d1");
   const per=d0&&d1 ? "自　"+jp(d0)+"　　至　"+jp(d1) : "";
   const R=(l,v,c="")=>`<tr class="${c}"><td>${l}</td><td class="n">${yen(v)}</td></tr>`;
   let h=`<div class="co">${esc(co)}</div>`;
 
-  if(kind==="A"){
+  if(kind==="A"||kind==="PL"){
     h+=`<h3>損益計算書</h3><div class="sub">${per}</div><table>`;
     h+=`<tr class="sec"><td colspan="2">売上高</td></tr>`+R("売上高",PL.uriage);
     if(PL.genka){h+=`<tr class="sec"><td colspan="2">売上原価</td></tr>`+R("仕入高",PL.genka)+R("売上総利益",PL.arari,"tot")}
@@ -923,9 +946,11 @@ function prt(kind){
     h+=R("販売費及び一般管理費 合計",PL.hankan,"tot")+R("営業利益",PL.eigyo,"tot");
     if(PL.zatsu){h+=`<tr class="sec"><td colspan="2">営業外収益</td></tr>`+R("雑収入",PL.zatsu)}
     h+=R("経常利益",PL.keijo,"tot");
-    if(BS.newTax) h+=R("法人税、住民税及び事業税",BS.newTax);
-    h+=R("当期純利益",BS.netIncome,"tot")+`</table>`;
-
+    if(BS&&BS.newTax) h+=R("法人税、住民税及び事業税",BS.newTax);
+    if(BS) h+=R("当期純"+(BS.netIncome<0?"損失":"利益"),BS.netIncome,"tot");
+    h+=`</table>`;
+  }
+  if(kind==="A"||kind==="BS"){
     h+=`<h3>貸借対照表</h3><div class="sub">${d1?jp(d1)+"　現在":""}</div><table>`;
     h+=`<tr class="sec"><td colspan="2">資産の部</td></tr>`+R("現金及び預金",BS.cash)+R("資産合計",BS.cash,"tot");
     h+=`<tr class="sec"><td colspan="2">負債の部</td></tr>`+R("未払法人税等",BS.tax)
@@ -933,7 +958,8 @@ function prt(kind){
     h+=`<tr class="sec"><td colspan="2">純資産の部</td></tr>`+R("資本金",BS.cap)
       +R("繰越利益剰余金",BS.ret)+R("純資産合計",BS.net,"tot")+R("負債・純資産合計",BS.liab+BS.net,"tot")+`</table>`;
     if(Math.abs(BS.diff)>=1) h+=`<div class="note2">※ 資産と負債・純資産に ${yen(Math.abs(BS.diff))}円 の差があります。記録されていない入出金がないかご確認ください。</div>`;
-
+  }
+  if(kind==="A"||kind==="SS"){
     h+=`<h3>株主資本等変動計算書</h3><div class="sub">${per}</div>
       <table><tr><th></th><th class="n">資本金</th><th class="n">繰越利益剰余金</th><th class="n">純資産合計</th></tr>
       <tr><td>当期首残高</td><td class="n">${yen(BS.cap)}</td><td class="n">${yen(BS.ret-BS.netIncome)}</td><td class="n">${yen(BS.net-BS.netIncome)}</td></tr>
