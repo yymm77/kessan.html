@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@400;700;900&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
 :root{
   --ink:#1a1208; --paper:#f5f0e8; --card:#fffdf9;
@@ -119,6 +120,14 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
 .neg{color:var(--verm)}
 .pill{display:inline-block;background:var(--indigo-pale);color:var(--indigo);border-radius:20px;
       padding:2px 12px;font-size:13px;font-weight:700;margin-left:8px}
+textarea{width:100%;font-family:inherit;font-size:15px;padding:12px;border:1px solid var(--line);
+  border-radius:8px;background:#fffdf0;line-height:1.7;resize:vertical}
+textarea:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
+#pdrop{border:3px dashed var(--indigo);border-radius:12px;background:var(--indigo-pale);
+  padding:30px 20px;text-align:center;cursor:pointer;margin-top:6px}
+#pdrop.hot{background:#d5e3f2;border-color:var(--gold)}
+#pdrop b{display:block;font-family:"Zen Old Mincho",serif;font-size:18px;color:var(--indigo);margin-bottom:6px}
+#pdrop span{color:var(--mid);font-size:14px}
 .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 0 10px}
 .tools .sep{flex:1}
 .btn.sm.on{background:var(--indigo);color:#fff}
@@ -176,6 +185,7 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <button role="tab" id="t5" aria-selected="false" onclick="go(5)" disabled>5　損益計算書</button>
   <button role="tab" id="t6" aria-selected="false" onclick="go(6)" disabled>6　貸借対照表</button>
   <button role="tab" id="t7" aria-selected="false" onclick="go(7)" disabled>7　印刷する</button>
+  <button role="tab" id="t8" aria-selected="false" onclick="go(8)">＋　領収書を取り込む</button>
 </nav>
 
 <!-- 0 設定 -->
@@ -278,6 +288,28 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
 
   <button class="btn" onclick="busy(this,calcBS)">貸借対照表を作る</button>
   <div id="bs"></div>
+</div></section>
+
+<!-- 8 領収書取り込み -->
+<section id="s8"><div class="panel">
+  <h2>領収書を取り込む</h2>
+  <p class="note">メールで届いた領収書や請求書から、日付・金額・支払先・費目を 読み取ります。<br>
+  <b>すべてこのパソコンの中だけで処理します。</b>どこにも送信されません。</p>
+
+  <h3>方法1　メールの本文を貼り付ける</h3>
+  <p class="note">メールを開いて全部選択（Ctrl+A）→ コピー（Ctrl+C）→ 下の枠に貼り付け（Ctrl+V）。複数まとめて貼っても構いません。</p>
+  <textarea id="rcpt" rows="7" placeholder="ここにメールの本文を貼り付けてください"></textarea>
+  <button class="btn" onclick="busy(this,()=>readText(document.getElementById('rcpt').value))">読み取る</button>
+
+  <h3>方法2　PDFを放り込む</h3>
+  <p class="note">Amazonや各種サービスが発行するPDFは、そのまま読めます。<br>
+  紙のレシートを撮影・スキャンしたものは、文字が画像になっているため読み取れません。手で入力してください。</p>
+  <div id="pdrop" tabindex="0" role="button">
+    <b>ここにPDFを置いてください</b><span>クリックして選ぶこともできます　複数可</span>
+  </div>
+  <input type="file" id="ppick" accept=".pdf" multiple hidden>
+
+  <div id="rlist"></div>
 </div></section>
 
 <!-- 7 印刷 -->
@@ -395,7 +427,7 @@ const ymd=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+Stri
 
 /* ══ 画面切替 ══ */
 function go(n){
-  for(let i=0;i<=7;i++){
+  for(let i=0;i<=8;i++){
     document.getElementById("s"+i).classList.toggle("on",i===n);
     document.getElementById("t"+i).setAttribute("aria-selected",i===n);
   }
@@ -922,6 +954,175 @@ function calcBS(){
   document.getElementById("bs").innerHTML=h;
   BS={cash,tax,loan,dep,cap:O("cap"),ret,liab,net,netIncome,diff,newTax:V("newTax")};
   unlock(7);
+}
+
+/* ══ 8. 領収書の取り込み ══ */
+/* 支払先の辞書。使いながら育てる。 [見分ける言葉, 支払先, 費目, 内容] */
+const VENDOR=[
+ [/日本保守党|シクミネット|SHIKUMINET/i,"日本保守党","諸会費","党員会費"],
+ [/東京郷友連盟/,"東京郷友連盟","諸会費","会費"],
+ [/App Store|Apple One|Apple Inc|iCloud/i,"Apple","通信費","Apple"],
+ [/Google One|Google LLC|Google Workspace/i,"Google","通信費","Google"],
+ [/Adobe/i,"Adobe","通信費","Adobe"],
+ [/Anthropic|Claude/i,"Anthropic","通信費","Claude"],
+ [/Microsoft|Office ?365/i,"Microsoft","通信費","Microsoft 365"],
+ [/ニコニコ|ドワンゴ|niconico/i,"ドワンゴ","通信費","ニコニコ"],
+ [/ドコモ|docomo|ＮＴＴドコモ/i,"NTTドコモ","通信費","携帯電話"],
+ [/ニフティ|nifty/i,"ニフティ","通信費","プロバイダ"],
+ [/ハルエネ|東京電力|電気料金/i,"電力会社","水道光熱費","電気料金"],
+ [/水道局|水道料金/,"水道局","水道光熱費","水道料金"],
+ [/多摩信用金庫|多摩信/,"多摩信用金庫","支払手数料","手数料"],
+ [/Amazon|アマゾン/i,"Amazon","消耗品費",""],
+ [/楽天/,"楽天","消耗品費",""],
+ [/ヨドバシ|ビックカメラ|ヤマダ電機/,"家電量販店","消耗品費",""],
+ [/ＥＮＥＯＳ|エネオス|出光|コスモ石油|ガソリン/i,"給油所","燃料費","ガソリン"],
+ [/ＥＴＣ|高速道路|ＮＥＸＣＯ|首都高/i,"高速道路","旅費交通費","高速代"],
+];
+let RCPT=[];
+function readText(t){
+  if(!t||t.trim().length<20){alert("本文を貼り付けてください。");return}
+  const got=parseReceipts(t,"貼り付け");
+  RCPT=RCPT.concat(got); drawRcpt();
+  if(!got.length) alert("日付と金額の組み合わせが見つかりませんでした。\n手で入力してください。");
+}
+function parseReceipts(text,src){
+  const out=[];
+  const yen=x=>Number(String(x).replace(/[,¥￥\s円]/g,""))||0;
+  const jdate=x=>{
+    let m=x.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
+    if(!m) m=x.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+    if(m) return `${m[1]}-${String(m[2]).padStart(2,"0")}-${String(m[3]).padStart(2,"0")}`;
+    m=x.match(/(\d{4})年\s*(\d{1,2})月/);        // 「請求月：2026年9月」のように日が無い場合
+    if(m) return `${m[1]}-${String(m[2]).padStart(2,"0")}-01`;
+    return null;
+  };
+  /* 領収書のかたまりに割る。1通に複数入っていることがあるので、
+     「日付と金額の両方が近くにある単位」で切る。区切り語が無くても拾えるようにする */
+  let blocks=text.split(/\n(?=\s*(?:領収書|受領書|請求書|ご購入ありがとう|Receipt|Invoice)\s*$)/im);
+  if(blocks.length===1){
+    // 区切り語が無い場合は、日付の出現位置で割る
+    const idx=[...text.matchAll(/(\d{4})年\s*\d{1,2}月\s*\d{1,2}日|(\d{4})[-\/.]\d{1,2}[-\/.]\d{1,2}/g)]
+      .map(m=>m.index);
+    if(idx.length>1){
+      blocks=[]; let st=0;
+      for(let i=1;i<idx.length;i++){
+        if(idx[i]-st>200){ blocks.push(text.slice(st,idx[i])); st=idx[i]; }
+      }
+      blocks.push(text.slice(st));
+    }
+  }
+  blocks.forEach(b=>{
+    if(b.replace(/\s/g,"").length<25) return;
+    const tm=b.match(/(?:ご請求金額|請求金額|合計金額|お支払金額|お支払い金額|決済金額|お買上げ計|合計|総額|Total)\s*[:：]?\s*[¥￥]?\s*([0-9][0-9,]*)/i);
+    let amount=tm?yen(tm[1]):0;
+    if(!amount){
+      const a=[...b.matchAll(/[¥￥]\s*([0-9][0-9,]{2,})|([0-9][0-9,]{2,})\s*円/g)]
+        .map(m=>yen(m[1]||m[2])).filter(v=>v>=100);
+      if(a.length) amount=Math.max(...a);
+    }
+    const dm=b.match(/(?:決済完了日時|決済日時|注文日時|注文日|お支払日|お支払い日|決済日|発行日|ご利用日|請求月|日付|Date)\s*[:：]?\s*([^\n]{0,40})/i);
+    const date=jdate(dm?dm[1]:"")||jdate(b);
+    if(!amount||!date) return;
+    let v=null; for(const x of VENDOR) if(x[0].test(b)){v=x;break;}
+    const inv=(b.match(/\bT\d{13}\b/)||[""])[0];
+    const mo=b.match(/(\d{1,2})\s*[ヶかケ箇]?月分/);
+    out.push({id:Math.random().toString(36).slice(2,9),src,date,
+      vendor:v?v[1]:"", item:v?v[2]:"", memo:(v&&v[3])||b.replace(/\s+/g,"").slice(0,22),
+      amount, pay:/クレジット|カード|Apple ID|残高|口座振替|引落|振替/.test(b)?"信用支出":"現金支出",
+      months:mo?Number(mo[1]):1, invoice:inv, kubun:"法人"});
+  });
+  // 同じ日付・金額は1件に
+  const seen=new Set();
+  return out.filter(r=>{const k=r.date+"|"+r.amount; if(seen.has(k))return false; seen.add(k); return true;});
+}
+function drawRcpt(){
+  const el=document.getElementById("rlist");
+  if(!RCPT.length){el.innerHTML="";return}
+  const opts=[...KAMOKU,"対象外（個人）"];
+  el.innerHTML=`<h3>読み取った内容　${RCPT.length}件</h3>
+   <p class="note">内容を確かめて直してください。よければ下の書き出しボタンでExcelに貼れる形にします。</p>
+   <div class="scroll"><table>
+   <thead><tr><th style="width:112px">日付</th><th>支払先・内容</th><th style="width:150px">費目</th>
+     <th class="n" style="width:96px">金額</th><th style="width:104px">支払</th>
+     <th style="width:84px">区分</th><th style="width:44px"></th></tr></thead><tbody>`+
+   RCPT.map((r,i)=>`<tr>
+     <td><input type="date" value="${r.date}" onchange="RCPT[${i}].date=this.value"></td>
+     <td><input type="text" value="${esc(r.vendor?r.vendor+"　"+r.memo:r.memo)}"
+          onchange="RCPT[${i}].memo=this.value;RCPT[${i}].vendor=''">
+       <div class="sug">${r.src}${r.invoice?"　登録番号 "+r.invoice:""}${
+         r.months>1?`　<b style="color:var(--verm)">${r.months}ヶ月分</b>`:""}</div></td>
+     <td><select class="${r.item?"":"unset"}" onchange="RCPT[${i}].item=this.value">
+       <option value="">— 選ぶ —</option>${opts.map(o=>`<option${o===r.item?" selected":""}>${o}</option>`).join("")}</select></td>
+     <td class="n"><input type="text" value="${r.amount.toLocaleString()}" style="text-align:right"
+          onchange="RCPT[${i}].amount=Number(this.value.replace(/[^0-9]/g,''))||0"></td>
+     <td><select onchange="RCPT[${i}].pay=this.value">
+       <option${r.pay==="信用支出"?" selected":""}>信用支出</option>
+       <option${r.pay==="現金支出"?" selected":""}>現金支出</option></select></td>
+     <td><select onchange="RCPT[${i}].kubun=this.value">
+       <option${r.kubun==="法人"?" selected":""}>法人</option>
+       <option${r.kubun==="個人"?" selected":""}>個人</option></select></td>
+     <td><button class="btn sm sub" style="padding:5px 9px" onclick="RCPT.splice(${i},1);drawRcpt()">削除</button></td>
+   </tr>`).join("")+`</tbody></table></div>
+   <div class="tools">
+     <button class="btn" onclick="rcptCsv()">Excelに貼る形で書き出す</button>
+     <button class="btn sm sub" onclick="rcptCopy()">クリップボードにコピー</button>
+     <span class="sep"></span>
+     <button class="btn sm sub" onclick="if(confirm('読み取った内容を全部消します。'))
+       {RCPT=[];drawRcpt()}">全部消す</button>
+   </div>
+   <p class="note">Excelの<b>A列（日付）から H列（区分）</b>の並びで出します。9月のシートの空いている行に貼り付けてください。</p>`;
+}
+function rcptRows(){
+  return RCPT.map(r=>{
+    const d=r.date, w="", it=r.item, memo=(r.vendor?r.vendor+" ":"")+r.memo;
+    const inc="", cre=r.pay==="信用支出"?r.amount:"", exp=r.pay==="現金支出"?r.amount:"";
+    return [d,w,it,inc,cre,exp,memo,r.kubun];
+  });
+}
+function rcptCsv(){
+  if(!RCPT.length){alert("読み取った内容がありません。");return}
+  const b=rcptRows().map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob=new Blob(["\uFEFF"+b],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="領収書_取込.csv"; a.click();
+}
+function rcptCopy(){
+  const t=rcptRows().map(r=>r.join("\t")).join("\n");
+  navigator.clipboard.writeText(t)
+    .then(()=>alert("コピーしました。Excelの空いている行を選んで、貼り付け（Ctrl+V）してください。"))
+    .catch(()=>alert("コピーできませんでした。書き出しボタンをお使いください。"));
+}
+/* PDF */
+(function(){
+  const d=document.getElementById("pdrop"), p=document.getElementById("ppick");
+  if(!d) return;
+  d.onclick=()=>p.click();
+  d.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();p.click()}};
+  d.ondragover=e=>{e.preventDefault();d.classList.add("hot")};
+  d.ondragleave=()=>d.classList.remove("hot");
+  d.ondrop=e=>{e.preventDefault();d.classList.remove("hot");pdfs(e.dataTransfer.files)};
+  p.onchange=e=>pdfs(e.target.files);
+})();
+async function pdfs(list){
+  for(const f of [...list]){
+    try{
+      const buf=await f.arrayBuffer();
+      const doc=await pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+      let t="";
+      for(let i=1;i<=doc.numPages;i++){
+        const pg=await doc.getPage(i);
+        const c=await pg.getTextContent();
+        t+=c.items.map(x=>x.str).join(" ")+"\n";
+      }
+      if(t.replace(/\s/g,"").length<20){
+        alert(f.name+"　文字が入っていません。\n紙を撮影・スキャンしたPDFと思われます。手で入力してください。");
+        continue;
+      }
+      const got=parseReceipts(t,f.name);
+      if(!got.length) alert(f.name+"　日付と金額が読み取れませんでした。");
+      RCPT=RCPT.concat(got); drawRcpt();
+    }catch(e){ alert(f.name+"　開けませんでした（"+e.message+"）"); }
+  }
 }
 
 /* ══ 7. 印刷 ══ */
