@@ -120,6 +120,12 @@ select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
 .neg{color:var(--verm)}
 .pill{display:inline-block;background:var(--indigo-pale);color:var(--indigo);border-radius:20px;
       padding:2px 12px;font-size:13px;font-weight:700;margin-left:8px}
+.dl{margin-top:18px;padding:16px 18px;background:var(--jade-pale);
+  border-left:5px solid var(--jade);border-radius:0 8px 8px 0}
+.dl b{display:block;font-size:15.5px;margin-bottom:5px}
+.dl p{font-size:14px;color:#3d4f46;margin-bottom:11px}
+.dl a{display:inline-block;text-decoration:none;background:var(--jade)}
+.dl a:hover{background:#245540}
 textarea{width:100%;font-family:inherit;font-size:15px;padding:12px;border:1px solid var(--line);
   border-radius:8px;background:#fffdf0;line-height:1.7;resize:vertical}
 textarea:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
@@ -215,6 +221,12 @@ textarea:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
   <div id="drop" tabindex="0" role="button">
     <b>ここにExcelファイルを置いてください</b>
     <span>クリックして選ぶこともできます　.xlsx形式</span>
+  </div>
+  <div class="dl">
+    <b>まだExcelをお持ちでない方へ</b>
+    <p>このツールに合わせた記入用のExcelを用意しています。費目と区分は一覧から選べます。
+       銀行の入出金・借入金・年間固定費のシートも入っています。</p>
+    <a class="btn sm" href="小口現金フォーム.xlsx" download>記入用Excelをダウンロード</a>
   </div>
   <input type="file" id="pick" accept=".xlsx,.xlsm" multiple hidden>
   <div id="files"></div>
@@ -465,6 +477,7 @@ function startTick(){
   },1000);
 }
 function take(list){
+  COLWARN=[];
   [...list].forEach(f=>{
     // 読み込み済み・読み込み中を問わず、同名なら受け付けない
     const already=files.find(x=>x.name===f.name && !x.err);
@@ -506,7 +519,37 @@ function take(list){
   });
 }
 /* 列位置固定で読む: A日付 B曜日 C費目 D収入 E信用支出 F現金支出 G内容 */
-let DIAG=[];
+let DIAG=[], COLWARN=[];
+/* 列の並びが想定どおりか調べる。A日付 C費目 D収入 E信用支出 F現金支出 G内容 H区分
+   列を挿入されると位置がずれるので、中身の型から見つける */
+function colCheck(a,sheet){
+  const isDate=v=>toDate(v)!==null;
+  const isNum =v=>v!=null&&v!==""&&isFinite(Number(String(v).replace(/[,¥\s]/g,"")));
+  const isTxt =v=>v!=null&&String(v).trim()!==""&&!isDate(v)&&!isNum(v);
+  const body=a.filter(r=>isDate(r[0])||isDate(r[1])||isDate(r[2]));  // データらしき行
+  if(body.length<3) return;
+  const rate=(f,c)=>body.filter(r=>f(r[c])).length/body.length;
+  const msg=[];
+  // A列が日付でないのに、他の列が日付なら、列がずれている
+  if(rate(isDate,0)<0.5){
+    for(let c=1;c<=3;c++) if(rate(isDate,c)>0.7)
+      msg.push(`日付が ${String.fromCharCode(65+c)}列 にあります。A列との間に ${c}列 挿入されていませんか`);
+  }
+  // C列が費目（文字）でない
+  if(rate(isDate,0)>=0.5 && rate(isTxt,2)<0.4 && rate(isNum,2)>0.5)
+    msg.push("C列が数字になっています。費目の列が動いていませんか");
+  // D〜Fが金額でない
+  const money=[3,4,5].some(c=>rate(isNum,c)>0.3||rate(v=>v==null||v==="",c)>0.9);
+  if(rate(isDate,0)>=0.5 && !money)
+    msg.push("D〜F列に金額が見当たりません。列が挿入されていませんか");
+  // H列が区分らしくない値で埋まっている
+  const h=body.filter(r=>r[7]!=null&&String(r[7]).trim()!=="");
+  if(h.length>=3){
+    const ok=h.filter(r=>/^(法人|個人)$/.test(String(r[7]).trim())).length/h.length;
+    if(ok<0.3) msg.push("H列に「法人」「個人」以外の値が入っています。区分の列が動いていませんか");
+  }
+  msg.forEach(m=>COLWARN.push({sheet,msg:m}));
+}
 /* 列位置固定で読む: A日付 B曜日 C費目 D収入 E信用支出 F現金支出 G内容
    ・シートの範囲が最終行まで広がっている場合があるので 5000行×7列に制限する
    ・raw:true で生の値を取る。書式に依存せずシリアル値が得られる */
@@ -520,6 +563,7 @@ function readSheet(ws,sheet,file){
   }catch(e){ return []; }
   const base=(XLSX.utils.decode_range(ws["!ref"]).s.r)+1;   // 実際の行番号に合わせる
   const out=[];
+  colCheck(a,sheet);
   a.slice(0,6).forEach((r,i)=>DIAG.push({sheet,line:base+i,
     a:r[0], atype:(r[0]instanceof Date)?"Date":typeof r[0],
     parsed:toDate(r[0]), c:r[2]}));
@@ -567,7 +611,7 @@ function toDate(v){
   return null;
 }
 function reset(){
-  files=[]; all=[]; fy=[]; dropped=[]; DIAG=[];
+  files=[]; all=[]; fy=[]; dropped=[]; DIAG=[]; COLWARN=[];
   document.getElementById("pick").value="";
   drawFiles();
 }
@@ -638,6 +682,13 @@ function toCheck(){
 
   const line=r=>`${r.sheet}!${r.line}行　${ymd(r.date)}　${r.item}　収${yen(r.inc)}／信${yen(r.cre)}／現${yen(r.exp)}　${r.memo}`;
   let h="";
+  if(COLWARN.length){
+    const u=[...new Set(COLWARN.map(w=>w.sheet+"｜"+w.msg))];
+    h+=`<div class="flag"><b>列の並びが、いつもと違うようです</b><div>${
+      u.map(x=>{const[s2,m]=x.split("｜");return `<b>${esc(s2)}</b>　${esc(m)}`}).join("<br>")}
+      <br><br>正しい並びは　A日付／B曜日／C費目／D収入／E信用支出／F現金支出／G内容／H区分　です。<br>
+      挿入した列を削除すれば元に戻ります。このまま進めると、数字が正しく集計されません。</div></div>`;
+  }
   h+=`<div class="flag ok"><b>会計期間内の取引　${fy.length}行</b><div>${
     Object.keys(months).sort().map(k=>k+" : "+months[k]+"件").join("　")}</div></div>`;
   if(dup) h+=`<div class="flag"><b>重複していた行を ${dup}件 まとめました</b><div>同じファイルを二重に読み込んだか、複数のバックアップに同じ月が入っていた場合に出ます。</div></div>`;
